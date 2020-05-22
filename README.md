@@ -42,13 +42,13 @@ Both plots show information about five different kind of system log events:
 
 The daily screen time plot shows you detailed information about the 5 states mentioned above and summarizes on the right from when to when you were actively working, plus what the cummulative sum of these screen times is.
 
-<img src="static/plot_day.png" width=600px>
+<img src="static/plot_day.png">
 
 #### Weekly screentime plot
 
 The weekly screen time plot shows you the same information as the daily screen time plot, starting from Saturday the week before. The only difference to the daily plot is the detailed information of the indiviudal screen time blocks.
 
-<img src="static/plot_week.png" width=600px>
+<img src="static/plot_week.png">
 
 
 ## Configuration
