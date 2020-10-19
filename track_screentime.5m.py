@@ -416,8 +416,12 @@ def plot_overview(df, filename, week_id, plot_restrictions=['08:00', '18:00']):
         entries_count = (~df['Active'].isna()).groupby(df.index).sum()
         timeticks_order = df.index.drop_duplicates(keep='first')
         idx = np.argwhere(entries_count[timeticks_order].to_numpy())
-        idx_min = idx.min()
-        idx_max = idx.max()
+        if len(idx)!=0:
+            idx_min = idx.min()
+            idx_max = idx.max()
+        else:
+            idx_min = 0
+            idx_max = len(entries_count)
 
         idx_min_start = np.argmax(entries_count[timeticks_order].index==plot_restrictions[0])
         idx_max_end = np.argmax(entries_count[timeticks_order].index==plot_restrictions[1])
