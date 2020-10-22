@@ -256,7 +256,7 @@ def plot_daily_stats(df, date, filename, plot_restrictions=['08:00', '18:00']):
     plt.ylim(y_lim)
 
     # Tweak tick label appearances
-    tick_id = np.linspace(0, len(group), num=24, endpoint=False, dtype='int')
+    tick_id = np.argwhere(group.index.str.contains(':00')+group.index.str.contains(':30')).ravel()
     tick_labels = group.index[tick_id]
     ax.set_xticks(tick_id)
     ax.set_xticklabels(tick_labels, rotation=90)
@@ -405,7 +405,7 @@ def plot_overview(df, filename, week_id, plot_restrictions=['08:00', '18:00']):
     # Tweak tick label appearances
     day_max = df.groupby('date').count()['timestamp'].idxmax()
     df_date = df[df['date']==day_max]
-    tick_id = np.linspace(0, len(df_date), num=24, endpoint=False, dtype='int')
+    tick_id = tick_id = np.argwhere(df_date.index.str.contains(':00')+df_date.index.str.contains(':30')).ravel()
     tick_labels = df_date.index[tick_id]
     ax.set_xticks(tick_id)
     ax.set_xticklabels(tick_labels, rotation=90)
