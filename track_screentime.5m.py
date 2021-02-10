@@ -120,10 +120,10 @@ def read_log_files(timewindow='7d', screensaver_offset='10m'):
 def unite_information(loginfos, sample_rate='60S', dayshift='5h'):
 
     # Resample dataframes to requested sampling rate
-    df_logins = loginfos['logins'].resample(sample_rate).ffill().bfill()
-    df_lid = loginfos['lid'].resample(sample_rate).ffill().bfill()
-    df_sleep = loginfos['sleep'].resample(sample_rate).ffill().bfill()
-    df_screensaver = loginfos['screensaver'].resample(sample_rate).ffill().bfill()
+    df_logins = loginfos['logins'].resample(sample_rate).max().ffill().bfill()
+    df_lid = loginfos['lid'].resample(sample_rate).max().ffill().bfill()
+    df_sleep = loginfos['sleep'].resample(sample_rate).max().ffill().bfill()
+    df_screensaver = loginfos['screensaver'].resample(sample_rate).max().ffill().bfill()
 
     # Combine logfile dataframes into one
     df = pd.DataFrame([df_lid.LidOpen,
