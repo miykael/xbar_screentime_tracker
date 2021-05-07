@@ -49,9 +49,13 @@ def read_log_files(timewindow='7d', screensaver_offset='10m'):
     # Extract Sleep State information
     time_sleep = []
     predicate = 'process == "PowerChime" and '
-    predicate += 'eventMessage contains "WAKE" and eventMessage contains "kStateAwake"'
+    predicate += 'eventMessage contains "handleUserBecameActive ENTERED"'
     for o in collect_log_information(timewindow, predicate):
-        time_sleep.append([o[:23], int(o[o.find(' WAKE:')+6:].split(' -> ')[1]=='kStateAwake')])
+        time_sleep.append([o[:23], 1])
+    predicate = 'process == "PowerChime" and '
+    predicate += 'eventMessage contains "DISPLAY will power OFF"'
+    for o in collect_log_information(timewindow, predicate):
+        time_sleep.append([o[:23], 0])
 
     # Extract ScreenSaver information
     time_screensaver = []
@@ -80,9 +84,9 @@ def read_log_files(timewindow='7d', screensaver_offset='10m'):
     df_lid = df_lid.drop(['stat1', 'stat2'], axis=1)
 
     # Create Sleep DataFrame
-    df_sleep = pd.DataFrame(time_sleep, columns=['TimeStamp', 'WakeState'])
+    df_sleep = pd.DataFrame(time_sleep, columns=['TimeStamp', 'SleepState'])
     df_sleep.TimeStamp = pd.to_datetime(df_sleep.TimeStamp)
-    df_sleep = df_sleep.set_index('TimeStamp')
+    df_sleep = df_sleep.set_index('TimeStamp').sort_index()
 
     # Create ScreenSaver DataFrame
     df_screensaver = pd.DataFrame(time_screensaver, columns=['TimeStamp', 'ScreenSaverOff'])
@@ -104,7 +108,7 @@ def read_log_files(timewindow='7d', screensaver_offset='10m'):
     df_lid = df_lid.append(
         pd.DataFrame(0, columns=['LidOpen'], index=new_borders)).sort_index()
     df_sleep = df_sleep.append(
-        pd.DataFrame(0, columns=['WakeState'], index=new_borders)).sort_index()
+        pd.DataFrame(0, columns=['SleepState'], index=new_borders)).sort_index()
     df_screensaver = df_screensaver.append(
         pd.DataFrame(0, columns=['ScreenSaverOff'], index=new_borders)).sort_index()
 
@@ -128,16 +132,16 @@ def unite_information(loginfos, sample_rate='60S', dayshift='5h'):
     # Combine logfile dataframes into one
     df = pd.DataFrame([df_lid.LidOpen,
                        df_logins.Unlocked,
-                       df_sleep.WakeState,
+                       df_sleep.SleepState,
                        df_screensaver.ScreenSaverOff]).T
 
     # Compute 'active' feature
     #df['Active'] = (df.LidOpen + df.Unlocked)>=1
-    #df['Active'] = df['Active'] * df.WakeState * df.ScreenSaverOff
+    #df['Active'] = df_lid.LidOpen * df.Unlocked * df.ScreenSaverOff
     df['Active'] = df.prod(axis=1)
 
     # Extract date information
-    df['weeknumber'] = df.index.weekofyear
+    df['weeknumber'] = pd.Int64Index(df.index.isocalendar().week)
     df['dayname'] = df.index.day_name()
     df['daynumber'] = df.index.day
     df['weeknumber'] = df.index.dayofweek
@@ -149,7 +153,7 @@ def unite_information(loginfos, sample_rate='60S', dayshift='5h'):
     df = df.replace(0, np.NaN)
 
     # Remove date without any recordings
-    df_records = df.groupby('date').sum()[['LidOpen', 'ScreenSaverOff', 'Active', 'Unlocked', 'WakeState']]
+    df_records = df.groupby('date').sum()[['LidOpen', 'ScreenSaverOff', 'Active', 'Unlocked', 'SleepState']]
     date_to_drop = df_records[df_records.sum(axis=1)==0].index
     df = df[~df.date.isin(date_to_drop)]
 
@@ -231,7 +235,7 @@ def report_worktime():
 def plot_daily_stats(df, date, filename, plot_restrictions=['08:00', '18:00']):
 
     # Categories to plot
-    categories = ['Active', 'LidOpen', 'ScreenSaverOff', 'Unlocked', 'WakeState']
+    categories = ['Active', 'LidOpen', 'ScreenSaverOff', 'Unlocked', 'SleepState']
 
     # Plot lines (separated by category and color coded by date)
     fig, ax = plt.subplots(figsize=(12, 4))
@@ -324,11 +328,11 @@ def plot_daily_stats(df, date, filename, plot_restrictions=['08:00', '18:00']):
     plt.close()
 
 
-def create_datily_stats(out_path, days_back=7, dayshift='5h'):
+def create_daily_stats(out_path, days_back=7, dayshift='5h'):
 
     # Collect list of recorded days
     recorded_stats = glob(os.path.join(out_path, 'day_*'))
-    recorded_stats = [d[d.find('day_20')+4:-4] for d in recorded_stats]
+    recorded_stats = sorted([d[d.find('day_20')+4:-4] for d in recorded_stats])
 
     # Get missing dates of last 7 stats
     days_to_check = []
@@ -352,7 +356,10 @@ def create_datily_stats(out_path, days_back=7, dayshift='5h'):
         # Create stats figures
         for date in days_to_check:
             filename = os.path.join(out_path, 'day_%s.png' % date)
-            plot_daily_stats(df, date, filename)
+            try:
+                plot_daily_stats(df, date, filename)
+            except:
+                continue
 
 
 def plot_stats_today(out_path, timewindow='3d', show_plot=True):
@@ -379,7 +386,7 @@ def plot_stats_today(out_path, timewindow='3d', show_plot=True):
 def plot_overview(df, filename, week_id, plot_restrictions=['08:00', '18:00']):
 
     # Categories to plot
-    categories = ['Active', 'LidOpen', 'ScreenSaverOff', 'Unlocked', 'WakeState']
+    categories = ['Active', 'LidOpen', 'ScreenSaverOff', 'Unlocked', 'SleepState']
 
     # Plot lines (separated by category and color coded by date)
     n_rows = df.date.nunique()
@@ -553,7 +560,7 @@ if __name__ == '__main__':
     else:
 
         # Create daily stats figure for missing dates
-        create_datily_stats(out_path)
+        create_daily_stats(out_path)
 
         # Create overview figure for previous week
         plot_prev_week(out_path)
