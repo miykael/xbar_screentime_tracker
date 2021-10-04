@@ -1,4 +1,4 @@
-# Bitbar Screentime Tracker
+# xbar Screentime Tracker
 
 [![GitHub size](https://github-size-badge.herokuapp.com/miykael/bitbar_screentime_tracker.svg)](https://github.com/miykael/bitbar_screentime_tracker/archive/master.zip)
 
