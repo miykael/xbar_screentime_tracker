@@ -1,11 +1,11 @@
 #!/anaconda3/bin/python
 
-# <bitbar.title>Screen time logger</bitbar.title>
-# <bitbar.version>v0.1</bitbar.version>
-# <bitbar.author>Michael Notter</bitbar.author>
-# <bitbar.author.github>miykael</bitbar.author.github>
-# <bitbar.desc>Tracks time spent in front of screen today and creates overview figures</bitbar.desc>
-# <bitbar.dependencies>python</bitbar.dependencies>
+# <xbar.title>Screen time logger</xbar.title>
+# <xbar.version>v0.1</xbar.version>
+# <xbar.author>Michael Notter</xbar.author>
+# <xbar.author.github>miykael</xbar.author.github>
+# <xbar.desc>Tracks time spent in front of screen today and creates overview figures</xbar.desc>
+# <xbar.dependencies>python</xbar.dependencies>
 
 import os
 import sys
@@ -569,9 +569,9 @@ if __name__ == '__main__':
         report_worktime()
 
         # Print options
-        bitbar_dir = pathlib.Path(__file__).parent.absolute()
-        file_path = os.path.join(bitbar_dir, __file__)
-        cmd_template = 'bash=/anaconda3/bin/python param1={0} param2={1} terminal=false'
+        xbar_dir = pathlib.Path(__file__).parent.absolute()
+        file_path = os.path.join(xbar_dir, __file__)
+        cmd_template = "shell=/anaconda3/bin/python param1='{0}' param2='{1}' terminal=false"
         print('---')
         print('Stats Today | %s' % cmd_template.format(file_path, 'stats'))
-        print('Overview Week  | %s' % cmd_template.format(file_path, 'week'))
+        print('Overview Week | %s' % cmd_template.format(file_path, 'week'))
