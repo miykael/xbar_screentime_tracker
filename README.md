@@ -1,16 +1,15 @@
 # Bitbar Screentime Tracker
 
 [![GitHub size](https://github-size-badge.herokuapp.com/miykael/bitbar_screentime_tracker.svg)](https://github.com/miykael/bitbar_screentime_tracker/archive/master.zip)
-[![GitHub HitCount](http://hits.dwyl.io/miykael/bitbar_screentime_tracker.svg)](http://hits.dwyl.io/miykael/bitbar_screentime_tracker)
 
-This repository contains a script that can help to keep track of the time spent in front of your computer Everything relevant to do this is stored in the file `track_screentime.5min.py`. The recommended way to use this script is to combine it with [Bitbar](https://github.com/matryer/bitbar), an application for Mac OS X which allows the printing of output directly into the menu bar.
+This repository contains a script that can help to keep track of the time spent in front of your computer Everything relevant to do this is stored in the file `track_screentime.5min.py`. The recommended way to use this script is to combine it with [xbar](https://github.com/matryer/xbar), an application for Mac OS X which allows the printing of output directly into the menu bar.
 
 
 ## Purpose
 
 The purpose of the screentime tracker script is rather simple, to track the **active** time spent in front of your computer. The goal is to give you a better feedback how much you've already worked to better judge when the workday is over, and when you've worked too much or not enough.
 
-The application has two ways to provide the information about the screen time. (1) Directly via the menubar (using the bitbar application) or (2) via informative plots.
+The application has two ways to provide the information about the screen time. (1) Directly via the menubar (using the xbar application) or (2) via informative plots.
 
 ### Menu bar indication of screen time
 
@@ -23,7 +22,7 @@ To help with the indication of how much of a workday has past, the application i
 
 ### Visual overview (daily and weekly) of screen time
 
-To provide a visual overview of how much time you've spent active in front of your computer, this script creates two kind of plots. Both of them are accessible through the dropdown menu in the bitbar section in the menubar:
+To provide a visual overview of how much time you've spent active in front of your computer, this script creates two kind of plots. Both of them are accessible through the dropdown menu in the xbar section in the menubar:
 
 <img src="static/dropdown.png" width=120px>
 
@@ -68,10 +67,10 @@ Additionally, you can also changing the time interval in which the script update
 
 ## Installation
 
-The easiest way to run this script in the background is to use the [Bitbar](https://github.com/matryer/bitbar) application. As this application is restricted to Mac OS X, the installation here is restricted to this OS, however the script `track_screentime.5min.py` should run on any OS which supports bash.
+The easiest way to run this script in the background is to use the [xbar](https://github.com/matryer/xbar) application. As this application is restricted to Mac OS X, the installation here is restricted to this OS, however the script `track_screentime.5min.py` should run on any OS which supports bash.
 
-The following instruction are focused on how to make this script run on a Mac OS X using the bitbar application:
+The following instruction are focused on how to make this script run on a Mac OS X using the xbar application:
 
-1. Install bitbar application as described [here](https://github.com/matryer/bitbar#installing-bitbar), either via the terminal or by installing it as an application.
-2. Create a plugin folder to store bitbar scripts, in our case this is under `~/bitbar` or `/Users/username/bitbar`.
-3. Download script `track_screentime.5min.py` from this repository and store it in the bitbar plugin folder mentioned in the previous point.
+1. Install xbar application as described [here](https://github.com/matryer/xbar#installing-xbar), either via the terminal or by installing it as an application.
+2. Create a plugin folder to store xbar scripts, in our case this is under `~/xbar` or `/Users/username/xbar`.
+3. Download script `track_screentime.5min.py` from this repository and store it in the xbar plugin folder mentioned in the previous point.
