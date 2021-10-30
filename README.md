@@ -1,7 +1,5 @@
 # xbar Screentime Tracker
 
-[![GitHub size](https://github-size-badge.herokuapp.com/miykael/xbar_screentime_tracker.svg)](https://github.com/miykael/xbar_screentime_tracker/archive/master.zip)
-
 This repository contains a script that can help to keep track of the time spent in front of your computer Everything relevant to do this is stored in the file `track_screentime.5min.py`. The recommended way to use this script is to combine it with [xbar](https://github.com/matryer/xbar), an application for Mac OS X which allows the printing of output directly into the menu bar.
 
 
