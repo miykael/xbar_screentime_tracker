@@ -66,7 +66,10 @@ def read_log_files(timewindow='7d', screensaver_offset='10m'):
     predicate = 'subsystem == "com.apple.loginwindow.logging" and '
     predicate += 'eventMessage contains "screenSaverIsRunning"'
     for o in collect_log_information(timewindow, predicate):
-        time_screensaver.append([o[:23], 1 - int(o[-1])])
+        try:
+            time_screensaver.append([o[:23], 1 - int(o[-1])])
+        except:
+            continue
 
     # Create Login DataFrame
     df_logins = pd.DataFrame(time_logins, columns=['TimeStamp', 'Unlocked'])
