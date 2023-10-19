@@ -20,6 +20,7 @@ import seaborn as sns
 sns.set_style("darkgrid")
 sns.set_context("talk")
 
+CATEGORIES = ["Active", "LidOpen", "ScreenSaverOff", "ActiveDisplay", "ScreenLock"]
 
 def collect_log_information(timewindow, predicate):
     # Define log command
@@ -32,12 +33,6 @@ def collect_log_information(timewindow, predicate):
 
 
 def read_log_files(timewindow="7d", screensaver_offset="10m"):
-    # Extract Screen lock information
-    time_logins = []
-    predicate = 'subsystem == "com.apple.corespeech" and '
-    predicate += 'eventMessage contains "Screen Lock Status Changed"'
-    for o in collect_log_information(timewindow, predicate):
-        time_logins.append([o[:23], int(o[o.find("Screen Lock Status Changed") + 29 :] == "Unlocked")])
 
     # Extract LidStatus information
     time_lid = []
@@ -46,36 +41,51 @@ def read_log_files(timewindow="7d", screensaver_offset="10m"):
     for o in collect_log_information(timewindow, predicate)[1:]:
         time_lid.append([o[:23], int(o[-1])])
 
-    # Extract Sleep State information
-    time_sleep = []
-    predicate = 'process == "PowerChime" and '
-    predicate += 'eventMessage contains "handleUserBecameActive ENTERED"'
-    for o in collect_log_information(timewindow, predicate):
-        time_sleep.append([o[:23], 1])
-    predicate = 'process == "PowerChime" and '
-    predicate += 'eventMessage contains "DISPLAY will power OFF"'
-    for o in collect_log_information(timewindow, predicate):
-        time_sleep.append([o[:23], 0])
-
     # Extract ScreenSaver information
     time_screensaver = []
-    # predicate = 'process == "studentd" and '
-    # predicate += 'eventMessage contains "ScreenSaver" and eventMessage contains "isRunning"'
-    # for o in collect_log_information(timewindow, predicate):
-    #    time_screensaver.append([o[:23], 1 - int(o[-1])])
     predicate = 'subsystem == "com.apple.loginwindow.logging" and '
     predicate += 'eventMessage contains "screenSaverIsRunning"'
     for o in collect_log_information(timewindow, predicate):
-        try:
-            time_screensaver.append([o[:23], 1 - int(o[-1])])
-        except:
-            continue
+        time_screensaver.append([o[:23], 1 - int(o[-1])])
 
-    # Create Login DataFrame
-    df_logins = pd.DataFrame(time_logins, columns=["TimeStamp", "Unlocked"])
-    df_logins.TimeStamp = pd.to_datetime(df_logins.TimeStamp)
-    df_logins = df_logins.set_index("TimeStamp")
-    df_logins = df_logins[df_logins.Unlocked.diff().fillna(1) != 0]
+    # Extract ActiveDisplay information
+    time_active_display = []
+    predicate = 'subsystem == "com.apple.loginwindow.logging" and '
+    predicate += 'eventMessage contains "ActiveDisplayList count"'
+    for o in collect_log_information(timewindow, predicate):
+        time_active_display.append([o[:23], int(int(o[-1])>0)])
+
+    # Extract ActiveDisplay information
+    time_screen_lock = []
+    predicate = 'subsystem == "com.apple.loginwindow.logging" and '
+    predicate += 'eventMessage contains "_setStatusViewHidden\:] | Enter, hidden"'
+    for o in collect_log_information(timewindow, predicate):
+        time_screen_lock.append([o[:23], int(o[-1])])
+
+    # Extract Skylight information
+    # time_skylight_event = []
+    # predicate = 'subsystem == "com.apple.SkyLight" and '
+    # predicate += 'eventMessage contains "Event\: Did "'
+    # for o in collect_log_information(timewindow, predicate):
+    #     time_skylight_event.append([o[:23], int(o.split('Did ')[-1]=='Sleep')])
+
+    # Extract Screen lock information
+    # time_logins = []
+    # predicate = 'subsystem == "com.apple.corespeech" and '
+    # predicate += 'eventMessage contains "Screen Lock Status Changed"'
+    # for o in collect_log_information(timewindow, predicate):
+    #     time_logins.append([o[:23], int(o[o.find("Screen Lock Status Changed") + 29 :] == "Unlocked")])
+
+    # # Extract Sleep State information
+    # time_sleep = []
+    # predicate = 'process == "PowerChime" and '
+    # predicate += 'eventMessage contains "handleUserBecameActive ENTERED"'
+    # for o in collect_log_information(timewindow, predicate):
+    #     time_sleep.append([o[:23], 1])
+    # predicate = 'process == "PowerChime" and '
+    # predicate += 'eventMessage contains "DISPLAY will power OFF"'
+    # for o in collect_log_information(timewindow, predicate):
+    #     time_sleep.append([o[:23], 0])
 
     # Create Lid DataFrame
     df_lid = pd.DataFrame(time_lid, columns=["TimeStamp", "LidOpen"])
@@ -83,17 +93,41 @@ def read_log_files(timewindow="7d", screensaver_offset="10m"):
     df_lid = df_lid.set_index("TimeStamp")
     df_lid = df_lid[df_lid.LidOpen.diff().fillna(1) != 0]
 
-    # Create Sleep DataFrame
-    df_sleep = pd.DataFrame(time_sleep, columns=["TimeStamp", "SleepState"])
-    df_sleep.TimeStamp = pd.to_datetime(df_sleep.TimeStamp)
-    df_sleep = df_sleep.set_index("TimeStamp").sort_index()
-
     # Create ScreenSaver DataFrame
     df_screensaver = pd.DataFrame(time_screensaver, columns=["TimeStamp", "ScreenSaverOff"])
     df_screensaver.TimeStamp = pd.to_datetime(df_screensaver.TimeStamp)
     df_screensaver.loc[(df_screensaver["ScreenSaverOff"] == 0), "TimeStamp"] -= pd.Timedelta(screensaver_offset)
     df_screensaver = df_screensaver.set_index("TimeStamp")
     df_screensaver = df_screensaver[df_screensaver.ScreenSaverOff.diff().fillna(1) != 0]
+
+    # Create ActiveDisplay DataFrame
+    df_active_display = pd.DataFrame(time_active_display, columns=["TimeStamp", "ActiveDisplay"])
+    df_active_display.TimeStamp = pd.to_datetime(df_active_display.TimeStamp)
+    df_active_display = df_active_display.set_index("TimeStamp")
+    df_active_display = df_active_display[df_active_display.ActiveDisplay.diff().fillna(1) != 0]
+
+    # Create ScreenLock DataFrame
+    df_screen_lock = pd.DataFrame(time_screen_lock, columns=["TimeStamp", "ScreenLock"])
+    df_screen_lock.TimeStamp = pd.to_datetime(df_screen_lock.TimeStamp)
+    df_screen_lock = df_screen_lock.set_index("TimeStamp")
+    df_screen_lock = df_screen_lock[df_screen_lock.ScreenLock.diff().fillna(1) != 0]
+
+    # Create SkylightEvent DataFrame
+    # df_skylight_event = pd.DataFrame(time_skylight_event, columns=["TimeStamp", "SkylightEvent"])
+    # df_skylight_event.TimeStamp = pd.to_datetime(df_skylight_event.TimeStamp)
+    # df_skylight_event = df_skylight_event.set_index("TimeStamp")
+    # df_skylight_event = df_skylight_event[df_skylight_event.SkylightEvent.diff().fillna(1) != 0]
+
+    # Create Login DataFrame
+    # df_logins = pd.DataFrame(time_logins, columns=["TimeStamp", "Unlocked"])
+    # df_logins.TimeStamp = pd.to_datetime(df_logins.TimeStamp)
+    # df_logins = df_logins.set_index("TimeStamp")
+    # df_logins = df_logins[df_logins.Unlocked.diff().fillna(1) != 0]
+
+    # Create Sleep DataFrame
+    # df_sleep = pd.DataFrame(time_sleep, columns=["TimeStamp", "SleepState"])
+    # df_sleep.TimeStamp = pd.to_datetime(df_sleep.TimeStamp)
+    # df_sleep = df_sleep.set_index("TimeStamp").sort_index()
 
     # Compute time borders of search
     time_start = pd.Timestamp.now() - pd.Timedelta(timewindow)
@@ -103,33 +137,57 @@ def read_log_files(timewindow="7d", screensaver_offset="10m"):
     new_borders = pd.to_datetime([time_start, time_now, time_end])
 
     # Add time borders of search as empty strings
-    df_logins = pd.concat([df_logins, pd.DataFrame(0, columns=["Unlocked"], index=new_borders)]).sort_index()
     df_lid = pd.concat([df_lid, pd.DataFrame(0, columns=["LidOpen"], index=new_borders)]).sort_index()
-    df_sleep = pd.concat([df_sleep, pd.DataFrame(0, columns=["SleepState"], index=new_borders)]).sort_index()
-    df_screensaver = pd.concat(
-        [df_screensaver, pd.DataFrame(0, columns=["ScreenSaverOff"], index=new_borders)]
-    ).sort_index()
+    df_screensaver = pd.concat([df_screensaver, pd.DataFrame(0, columns=["ScreenSaverOff"], index=new_borders)]).sort_index()
+    df_active_display = pd.concat([df_active_display, pd.DataFrame(0, columns=["ActiveDisplay"], index=new_borders)]).sort_index()
+    df_screen_lock = pd.concat([df_screen_lock, pd.DataFrame(0, columns=["ScreenLock"], index=new_borders)]).sort_index()
+    # df_skylight_event = pd.concat([df_skylight_event, pd.DataFrame(0, columns=["SkylightEvent"], index=new_borders)]).sort_index()
+    # df_logins = pd.concat([df_logins, pd.DataFrame(0, columns=["Unlocked"], index=new_borders)]).sort_index()
+    # df_sleep = pd.concat([df_sleep, pd.DataFrame(0, columns=["SleepState"], index=new_borders)]).sort_index()
 
     # Store individual logfiles in dictionary
-    loginfos = {"logins": df_logins, "lid": df_lid, "sleep": df_sleep, "screensaver": df_screensaver}
+    loginfos = {"lid": df_lid,
+                "screensaver": df_screensaver,
+                "active_display": df_active_display,
+                "screen_lock": df_screen_lock,
+                # "skylight_event": df_skylight_event,
+                # "logins": df_logins,
+                # "sleep": df_sleep,
+                }
 
     return loginfos
 
 
 def unite_information(loginfos, sample_rate="60S", dayshift="5h"):
     # Resample dataframes to requested sampling rate
-    df_logins = loginfos["logins"].resample(sample_rate).max().ffill().bfill()
     df_lid = loginfos["lid"].resample(sample_rate).max().ffill().bfill()
-    df_sleep = loginfos["sleep"].resample(sample_rate).max().ffill().bfill()
     df_screensaver = loginfos["screensaver"].resample(sample_rate).max().ffill().bfill()
+    df_active_display = loginfos["active_display"].resample(sample_rate).max().ffill().bfill()
+    df_screen_lock = loginfos["screen_lock"].resample(sample_rate).max().ffill().bfill()
+    # df_skylight_event = loginfos["skylight_event"].resample(sample_rate).max().ffill().bfill()
+    # df_logins = loginfos["logins"].resample(sample_rate).max().ffill().bfill()
+    # df_sleep = loginfos["sleep"].resample(sample_rate).max().ffill().bfill()
 
     # Combine logfile dataframes into one
-    df = pd.DataFrame([df_lid.LidOpen, df_logins.Unlocked, df_sleep.SleepState, df_screensaver.ScreenSaverOff]).T
+    df = pd.DataFrame([df_lid.LidOpen,
+                       df_screensaver.ScreenSaverOff,
+                       df_active_display.ActiveDisplay,
+                       df_screen_lock.ScreenLock,
+                       # df_skylight_event.SkylightEvent,
+                       # df_logins.Unlocked,
+                       # df_sleep.SleepState
+                       ]).T
 
     # Compute 'active' feature
-    # df['Active'] = (df.LidOpen + df.Unlocked)>=1
-    # df['Active'] = df_lid.LidOpen * df.Unlocked * df.ScreenSaverOff
-    df["Active"] = df.prod(axis=1)
+    # df["Active"] = df.prod(axis=1)
+    df['Active'] = df[['LidOpen',
+                       'ScreenSaverOff',
+                       'ActiveDisplay',
+                       'ScreenLock',
+                       # 'SkylightEvent',
+                       # 'Unlocked',
+                       # 'SleepState'
+                       ]].fillna(0).prod(axis=1).replace(0, np.nan)
 
     # Extract date information
     df["weeknumber"] = df.index.isocalendar().week.values.astype("int")
@@ -147,7 +205,7 @@ def unite_information(loginfos, sample_rate="60S", dayshift="5h"):
     df_records = (
         df.drop(columns=["timestamp"])
         .groupby("date")
-        .sum()[["LidOpen", "ScreenSaverOff", "Active", "Unlocked", "SleepState"]]
+        .sum()[CATEGORIES]
     )
     date_to_drop = df_records[df_records.sum(axis=1) == 0].index
     df = df[~df.date.isin(date_to_drop)]
@@ -226,7 +284,7 @@ def report_worktime():
 
 def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     # Categories to plot
-    categories = ["Active", "LidOpen", "ScreenSaverOff", "Unlocked", "SleepState"]
+    categories = CATEGORIES
 
     # Plot lines (separated by category and color coded by date)
     fig, ax = plt.subplots(figsize=(12, 4))
@@ -330,7 +388,7 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     plt.close()
 
 
-def create_daily_stats(out_path, days_back=7, dayshift="5h"):
+def create_daily_stats(out_path, days_back=5, dayshift="5h"):
     # Collect list of recorded days
     recorded_stats = glob(os.path.join(out_path, "day_*"))
     recorded_stats = sorted([d[d.find("day_20") + 4 : -4] for d in recorded_stats])
@@ -384,7 +442,7 @@ def plot_stats_today(out_path, timewindow="3d", show_plot=True):
 
 def plot_overview(df, filename, week_id, plot_restrictions=["06:00", "18:00"]):
     # Categories to plot
-    categories = ["Active", "LidOpen", "ScreenSaverOff", "Unlocked", "SleepState"]
+    categories = CATEGORIES
 
     # Plot lines (separated by category and color coded by date)
     n_rows = df.date.nunique()
