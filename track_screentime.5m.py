@@ -239,6 +239,9 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
         ls = "-" if j == 0 else "--"
         ds.plot(linewidth=lw, ax=ax, legend=True, linestyle=ls)
 
+    # Save dataframe to file
+    group.to_csv(filename.replace(".png", ".csv.zip").replace("_log_plots", "_log_data"))
+
     # Adjust y-axis limit
     ax.set_ylim(np.array(ax.get_ylim()) - np.array((0.1, -0.1)))
 
@@ -535,9 +538,12 @@ def plot_current_week(out_path, days_back=7, dayshift="5h", show_plot=True):
 if __name__ == "__main__":
     # Create folder 'screentime_log' in home folder if not exist
     home_path = os.path.expanduser("~")
-    out_path = os.path.join(home_path, "screentime_log")
+    out_path = os.path.join(home_path, "Documents", "screentime_log_plots")
     if not os.path.exists(out_path):
         os.makedirs(out_path)
+    out_path_data = os.path.join(home_path, "Documents", "screentime_log_data")
+    if not os.path.exists(out_path_data):
+        os.makedirs(out_path_data)
 
     # Create current figures if requested
     arguments = sys.argv
