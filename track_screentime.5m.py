@@ -183,7 +183,7 @@ def unite_information(loginfos, sample_rate="60S", dayshift="5h"):
     df['Active'] = df[['LidOpen',
                        'ScreenSaverOff',
                        'ActiveDisplay',
-                       'ScreenLock',
+                       # 'ScreenLock',
                        # 'SkylightEvent',
                        # 'Unlocked',
                        # 'SleepState'
