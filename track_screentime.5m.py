@@ -181,9 +181,9 @@ def unite_information(loginfos, sample_rate="60S", dayshift="5h"):
     # Compute 'active' feature
     # df["Active"] = df.prod(axis=1)
     df['Active'] = df[['LidOpen',
-                       'ScreenSaverOff',
+                       #'ScreenSaverOff',
                        'ActiveDisplay',
-                       # 'ScreenLock',
+                       # 'ScreenLock',
                        # 'SkylightEvent',
                        # 'Unlocked',
                        # 'SleepState'
