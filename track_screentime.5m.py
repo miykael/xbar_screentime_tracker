@@ -215,6 +215,7 @@ def unite_information(loginfos, sample_rate="60S", dayshift="5h"):
 
 # Current Work Time
 def get_worktime_today(timewindow="3d"):
+
     # Read logfiles to extract relevant information
     loginfos = read_log_files(timewindow=timewindow)
 
@@ -227,16 +228,24 @@ def get_worktime_today(timewindow="3d"):
 
     # Compute total work time today
     target = df_today["Active"]
-    delta_start = df_today.timestamp[target.fillna(0).diff() > 0]
+    start_mask = target.fillna(0).diff() > 0
+    if np.any(start_mask):
+        delta_start = df_today.timestamp[start_mask]
+    else:
+        delta_start = df_today.timestamp[:1]
     delta_stop = df_today.timestamp[target.fillna(0).diff() < 0]
 
     # Correct if end of day is missing
     if len(delta_stop) > len(delta_start):
         start_of_day = delta_start[0].to_period("D").to_timestamp(how="start")
-        delta_start["00:00"] = start_of_day.strftime("%Y-%m-%d %H:%M:%S")
+        delta_start["05:00"] = start_of_day.strftime("%Y-%m-%d %H:%M:%S").replace('00:00:00', '05:00:00')
     if len(delta_stop) < len(delta_start):
         end_of_day = delta_stop[0].to_period("D").to_timestamp(how="end")
         delta_stop["23:59"] = end_of_day.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Order index
+    delta_start = delta_start.sort_index()
+    delta_stop = delta_stop.sort_index()
 
     deltas = pd.to_timedelta(delta_stop.values - delta_start.values)
 
@@ -349,10 +358,14 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     # Correct if end of day is missing
     if len(delta_stop) > len(delta_start):
         start_of_day = delta_start[0].to_period("D").to_timestamp(how="start")
-        delta_start["00:00"] = start_of_day.strftime("%Y-%m-%d %H:%M:%S")
+        delta_start["05:00"] = start_of_day.strftime("%Y-%m-%d %H:%M:%S").replace('00:00:00', '05:00:00')
     if len(delta_stop) < len(delta_start):
         end_of_day = delta_stop[0].to_period("D").to_timestamp(how="end")
         delta_stop["23:59"] = end_of_day.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Order index
+    delta_start = delta_start.sort_index()
+    delta_stop = delta_stop.sort_index()
 
     deltas = pd.to_timedelta(delta_stop.values - delta_start.values)
     deltas_total = str(pd.Series(deltas).sum())[-8:]
@@ -514,10 +527,14 @@ def plot_overview(df, filename, week_id, plot_restrictions=["06:00", "18:00"]):
         # Correct if end of day is missing
         if len(delta_stop) > len(delta_start):
             start_of_day = delta_start[0].to_period("D").to_timestamp(how="start")
-            delta_start["00:00"] = start_of_day.strftime("%Y-%m-%d %H:%M:%S")
+            delta_start["05:00"] = start_of_day.strftime("%Y-%m-%d %H:%M:%S").replace('00:00:00', '05:00:00')
         if len(delta_stop) < len(delta_start):
             end_of_day = delta_stop[0].to_period("D").to_timestamp(how="end")
             delta_stop["23:59"] = end_of_day.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Order index
+        delta_start = delta_start.sort_index()
+        delta_stop = delta_stop.sort_index()
 
         deltas = pd.to_timedelta(delta_stop.values - delta_start.values)
         deltas_total = str(pd.Series(deltas).sum())[-8:]
