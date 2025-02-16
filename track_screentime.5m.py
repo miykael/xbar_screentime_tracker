@@ -340,6 +340,40 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
             linewidth=line_width,
             drawstyle="steps-post",
         )
+
+        # Add gap duration labels for the Active category only
+        if category == "Active":
+
+            # Find gaps (NaN values)
+            is_nan = ds.isna()
+            gap_starts = np.where(is_nan & ~is_nan.shift(1).fillna(False))[0]
+            gap_ends = np.where(is_nan & ~is_nan.shift(-1).fillna(False))[0]
+
+            # Process each gap
+            for start, end in zip(gap_starts, gap_ends):
+                # Skip if this is at the start or end of the day
+                if start == 0 or end == len(ds) - 1:
+                    continue
+
+                # Calculate gap duration in minutes
+                start_time = pd.to_datetime(group.timestamp.iloc[start])
+                end_time = pd.to_datetime(group.timestamp.iloc[end])
+                gap_mins = (end_time - start_time).total_seconds() / 60
+
+                # Only label gaps > 5 minutes
+                if gap_mins >= 5:
+
+                    # Position label in middle of gap
+                    x_pos = (start + end) / 2
+                    y_pos = ds.iloc[start - 1] + 0.01  # Slightly above the line
+
+                    # Add text label
+                    ax.text(x_pos, y_pos, f"{int(gap_mins)}m",
+                           horizontalalignment='center',
+                           verticalalignment='bottom',
+                           fontsize=10,
+                           color='grey')
+
     csv_filename = filename.replace(".png", ".csv.zip").replace(
         "_log_plots", "_log_data"
     )
