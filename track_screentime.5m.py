@@ -397,8 +397,8 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     if plot_restrictions and group["Active"].notna().sum():
         valid_entries = group["Active"].notna()
         idx = np.argwhere(valid_entries.to_numpy())
-        idx_min = idx.min() - 10
-        idx_max = idx.max() + 10
+        idx_min = idx.min() - 30
+        idx_max = idx.max() + 30
         start_idx = np.argmax(group.index == plot_restrictions[0])
         end_idx = np.argmax(group.index == plot_restrictions[1])
         idx_min = min(idx_min, start_idx)
