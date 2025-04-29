@@ -213,6 +213,10 @@ def calculate_active_intervals(df, active_col="Active", day_shift=DEFAULT_DAYSHI
     After computing the active interval (and padding boundaries if necessary), the 5h is re-added
     so that the reported times remain in the original time.
     """
+    # Return empty values if the DataFrame is empty
+    if df.empty:
+        return pd.Series([]), pd.Series([]), pd.Timedelta(0)
+
     # Convert original timestamps and compute shifted timestamps.
     original_ts = pd.to_datetime(df.timestamp)
     shifted_ts = original_ts - pd.Timedelta(day_shift)
