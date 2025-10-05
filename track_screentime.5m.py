@@ -1,6 +1,5 @@
 #!/Users/mnotter/.venvs/screentime/bin/python3
 # <xbar.title>Screen time logger</xbar.title>
-# <xbar.version>v0.3</xbar.version>
 # <xbar.author>Michael Notter</xbar.author>
 # <xbar.author.github>miykael</xbar.author.github>
 # <xbar.desc>Tracks time spent in front of screen today and creates overview figures with a 5h shift</xbar.desc>
@@ -9,14 +8,13 @@
 # <swiftbar.refreshOnOpen>false</swiftbar.refreshOnOpen>
 
 import os
-import pathlib
 import sys
 import subprocess
 from glob import glob
 from datetime import timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,62 +27,68 @@ sns.set_context("talk")
 # -----------------------------------------------------------------------------------
 # Global configuration and constants
 # -----------------------------------------------------------------------------------
-# The list of categories to be plotted. "Active" is computed from all three conditions.
 CATEGORIES = ["Active", "LidOpen", "ActiveDisplay", "ScreenLock"]
-DEFAULT_DAILY_TIMEWINDOW = "1d"
-DEFAULT_SCREENSAVER_OFFSET = "10m"
-DEFAULT_SAMPLE_RATE = "60s"  # lowercase 's' avoids deprecation warnings
+DEFAULT_DAILY_TIMEWINDOW = "24h"
+DEFAULT_SAMPLE_RATE = "60s"
 DEFAULT_DAYSHIFT = "5h"
 
+# Visuals
+OPEN_HOUR = "09:00"
+CLOSE_HOUR = "17:00"
+
+# Idle overlay
+ENABLE_IDLE_OVERLAY = True
+DEFAULT_IDLE_THRESHOLD_MINUTES = 5  # label gaps >= this many minutes
+
+# Unified predicate for a single pass over the log
+COMBINED_PREDICATE = (
+    "("
+    'process == "loginwindow" OR process == "powerd"'
+    ") AND ("
+    'eventMessage CONTAINS[c] "IOPMScheduleUserActiveChangedNotification" OR '
+    'eventMessage CONTAINS[c] "ActiveDisplayList count" OR '
+    'eventMessage CONTAINS[c] "Display is turned" OR '
+    '(eventMessage CONTAINS[c] "SessionAgentNotificationCenter" AND eventMessage CONTAINS[c] "screenIsLocked")'
+    ")"
+)
+
 
 # -----------------------------------------------------------------------------------
-# Log extraction and DataFrame creation functions
+# Log extraction
 # -----------------------------------------------------------------------------------
-def collect_log_information(timewindow, predicate):
+def _run_log_show(timewindow: str, predicate: str) -> list[str]:
     """
-    Executes the macOS log command and returns a list of log lines.
-    The predicate is enclosed in single quotes so that internal double quotes are preserved.
+    Execute `log show` with a predicate and return timestamped lines.
+    Uses compact style and filters out headers. No shell invocation.
     """
-    command = f"log show --last {timewindow} --style compact --predicate '{predicate}'"
-    try:
-        output = subprocess.check_output(command, shell=True, text=True)
-    except subprocess.CalledProcessError:
+    cmd = [
+        "log",
+        "show",
+        "--last",
+        timewindow,
+        "--style",
+        "compact",
+        "--predicate",
+        predicate,
+    ]
+    cp = subprocess.run(cmd, capture_output=True, text=True)
+    if cp.returncode != 0 or not cp.stdout:
         return []
-    lines = output.splitlines()
-    if lines and lines[0].startswith("Timestamp"):
-        return lines[1:]
-    return lines
+    return [ln for ln in cp.stdout.splitlines() if ln[:4].isdigit()]
 
 
-def create_log_dataframe(log_lines, key, transform_func):
-    """
-    Converts log lines into a DataFrame.
-    Assumes each log line starts with a timestamp (first two tokens)
-    and applies transform_func to extract a numeric value.
-    """
-    data = []
-    timestamps = []
-    for line in log_lines:
-        parts = line.split()
-        timestamp_str = parts[0] + " " + parts[1]
-        timestamp = pd.to_datetime(timestamp_str, errors="coerce")
-        if pd.isnull(timestamp):
-            continue
-        try:
-            value = transform_func(line)
-        except Exception:
-            value = 0
-        timestamps.append(timestamp)
-        data.append(value)
-    if not timestamps:
-        return pd.DataFrame({key: []})
-    return pd.DataFrame({key: data}, index=pd.DatetimeIndex(timestamps))
+def _to_ts(two_tokens: list[str]) -> pd.Timestamp | None:
+    """Convert first two whitespace tokens into pandas Timestamp."""
+    try:
+        return pd.to_datetime(f"{two_tokens[0]} {two_tokens[1]}", errors="coerce")
+    except Exception:
+        return None
 
 
-# --- Transformation functions (returning 0 by default if not found) ---
-def extract_lid_value(line):
-    # Expect lines like: "... IOPMScheduleUserActiveChangedNotification received:1"
-    if "received:" in line:
+# --- Line parsers (return 1/0) -----------------------------------------------------
+def _parse_lid(line: str) -> int:
+    """IOPMScheduleUserActiveChangedNotification received:N  -> N in {0,1}."""
+    if "IOPMScheduleUserActiveChangedNotification" in line and "received:" in line:
         try:
             return int(line.split("received:")[-1].strip())
         except Exception:
@@ -92,98 +96,134 @@ def extract_lid_value(line):
     return 0
 
 
-def extract_active_display_value(line):
-    # Expect lines like: "... ActiveDisplayList count = 1"
-    if "=" in line:
+def _parse_display(line: str) -> int:
+    """
+    Active display state:
+      - loginwindow: ActiveDisplayList count = N  -> 1 if N>0
+      - powerd: Display is turned on/off         -> 1/0
+    """
+    if "ActiveDisplayList" in line and "=" in line:
         try:
             return 1 if int(line.split("=")[-1].strip()) > 0 else 0
         except Exception:
             return 0
-    return 0
-
-
-def extract_screenlock_value(line):
-    # Expect lines like: "... _setStatusViewHidden:] | Enter, hidden: 0" (0 means locked, so 1 means unlocked)
-    if "hidden:" in line:
-        try:
-            # Return 1 for unlocked, 0 for locked.
-            return 1 - int(line.split("hidden:")[-1].strip())
-        except Exception:
+    if "powerd" in line:
+        if "Display is turned on" in line:
+            return 1
+        if "Display is turned off" in line:
             return 0
     return 0
 
 
-def read_log_files(timewindow, screensaver_offset=DEFAULT_SCREENSAVER_OFFSET):
+def _parse_lock(line: str) -> int:
     """
-    Reads log entries for various events concurrently based on preset predicates
-    and converts them into a dictionary mapping event names to DataFrames.
+    Session lock:
+      loginwindow/SessionAgentNotificationCenter: ... screenIsLocked = 1/0
+      Return 1 for *unlocked*, 0 for locked.
     """
-    predicates = {
-        "LidOpen": 'subsystem == "com.apple.loginwindow.logging" AND composedMessage CONTAINS[c] "IOPMScheduleUserActiveChangedNotification"',
-        "ActiveDisplay": 'subsystem == "com.apple.loginwindow.logging" AND composedMessage CONTAINS[c] "ActiveDisplayList count"',
-        "ScreenLock": 'subsystem == "com.apple.loginwindow.logging" AND composedMessage CONTAINS[c] "_setStatusViewHidden:] | Enter, hidden"',
+    if "SessionAgentNotificationCenter" in line and "screenIsLocked" in line:
+        tail = line.split("screenIsLocked")[-1]
+        digits = "".join(ch for ch in tail if ch.isdigit())
+        if digits:
+            return 0 if digits[-1] == "1" else 1
+    return 0
+
+
+# -----------------------------------------------------------------------------------
+# Unified read (one log pass) and DataFrame construction
+# -----------------------------------------------------------------------------------
+def read_log_files(timewindow: str) -> dict[str, pd.DataFrame]:
+    """
+    Read all relevant events with a single `log show` call, then split into streams.
+    Returns dict with keys: lid, active_display, screen_lock.
+    """
+    lines = _run_log_show(timewindow, COMBINED_PREDICATE)
+    if not lines:
+        empty = lambda col: pd.DataFrame({col: []})
+        return {
+            "lid": empty("LidOpen"),
+            "active_display": empty("ActiveDisplay"),
+            "screen_lock": empty("ScreenLock"),
+        }
+
+    lid_ts, lid_vals = [], []
+    disp_ts, disp_vals = [], []
+    lock_ts, lock_vals = [], []
+
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) < 2:
+            continue
+        ts = _to_ts(parts[:2])
+        if ts is None or pd.isna(ts):
+            continue
+
+        if "IOPMScheduleUserActiveChangedNotification" in ln:
+            lid_ts.append(ts)
+            lid_vals.append(_parse_lid(ln))
+            continue
+        if "ActiveDisplayList" in ln or "Display is turned" in ln:
+            disp_ts.append(ts)
+            disp_vals.append(_parse_display(ln))
+            continue
+        if "screenIsLocked" in ln:
+            lock_ts.append(ts)
+            lock_vals.append(_parse_lock(ln))
+            continue
+
+    def _mkdf(ts_list, vals_list, col):
+        if not ts_list:
+            return pd.DataFrame({col: []})
+        return pd.DataFrame(
+            {col: vals_list}, index=pd.DatetimeIndex(ts_list, name="ts")
+        )
+
+    results = {
+        "lid": _mkdf(lid_ts, lid_vals, "LidOpen"),
+        "active_display": _mkdf(disp_ts, disp_vals, "ActiveDisplay"),
+        "screen_lock": _mkdf(lock_ts, lock_vals, "ScreenLock"),
     }
 
-    transforms = {
-        "LidOpen": extract_lid_value,
-        "ActiveDisplay": extract_active_display_value,
-        "ScreenLock": extract_screenlock_value,
-    }
-    key_map = {
-        "LidOpen": "lid",
-        "ActiveDisplay": "active_display",
-        "ScreenLock": "screen_lock",
-    }
-
-    def fetch_data(orig_key):
-        pred = predicates[orig_key]
-        tf = transforms[orig_key]
-        log_lines = collect_log_information(timewindow, pred)
-        df = create_log_dataframe(log_lines, orig_key, tf)
-        return key_map[orig_key], df
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=len(predicates)) as executor:
-        futures = {executor.submit(fetch_data, key): key for key in predicates}
-        for future in as_completed(futures):
-            k, df = future.result()
-            results[k] = df
-
+    # Pad each stream with [day start, now, day end] zeros for stable resampling
     time_start = (pd.Timestamp.now() - pd.Timedelta(timewindow)).floor("D")
     time_now = pd.Timestamp.now().round("s")
     time_end = pd.Timestamp.now().ceil("D")
-    new_borders = pd.to_datetime([time_start, time_now, time_end])
-    for key, df in results.items():
+    borders = pd.to_datetime([time_start, time_now, time_end])
+
+    for k, df in results.items():
         if df.empty:
             continue
-        borders_df = pd.DataFrame({df.columns[0]: 0}, index=new_borders)
-        results[key] = pd.concat([df, borders_df]).sort_index()
+        pad = pd.DataFrame({df.columns[0]: [0, 0, 0]}, index=borders)
+        results[k] = pd.concat([df, pad]).sort_index()
+
     return results
 
 
+# -----------------------------------------------------------------------------------
+# Unification and derived columns
+# -----------------------------------------------------------------------------------
 def unite_information(
-    loginfos, sample_rate=DEFAULT_SAMPLE_RATE, dayshift=DEFAULT_DAYSHIFT
-):
+    loginfos: dict,
+    sample_rate: str = DEFAULT_SAMPLE_RATE,
+    dayshift: str = DEFAULT_DAYSHIFT,
+) -> pd.DataFrame:
     """
-    Combines separate DataFrames of log events into a unified DataFrame.
-    It also subtracts the day shift from timestamps so that each event is labeled
-    with a date corresponding to (timestamp - day_shift).
+    Resample the three signals and compute:
+      Active = LidOpen × ActiveDisplay × ScreenLock  (1/0 product, NaN for 0)
+    Attach shifted-date fields for grouping and plotting.
     """
     df_lid = loginfos["lid"].resample(sample_rate).max().ffill().bfill()
-    df_active_display = (
-        loginfos["active_display"].resample(sample_rate).max().ffill().bfill()
-    )
-    df_screen_lock = loginfos["screen_lock"].resample(sample_rate).max().ffill().bfill()
+    df_disp = loginfos["active_display"].resample(sample_rate).max().ffill().bfill()
+    df_lock = loginfos["screen_lock"].resample(sample_rate).max().ffill().bfill()
 
     combined = pd.DataFrame(
         {
-            "LidOpen": df_lid.LidOpen,
-            "ActiveDisplay": df_active_display.ActiveDisplay,
-            "ScreenLock": df_screen_lock.ScreenLock,
+            "LidOpen": df_lid["LidOpen"],
+            "ActiveDisplay": df_disp["ActiveDisplay"],
+            "ScreenLock": df_lock["ScreenLock"],  # 1 == unlocked
         }
     )
 
-    # Compute "Active" as the product of all three conditions.
     combined["Active"] = (
         combined[["LidOpen", "ActiveDisplay", "ScreenLock"]]
         .fillna(0)
@@ -191,130 +231,100 @@ def unite_information(
         .replace(0, np.nan)
     )
 
-    # Add additional time info.
-    # Subtract the day shift to determine which workday the log entry belongs to.
     combined["weeknumber"] = combined.index.dayofweek
     combined["dayname"] = combined.index.day_name()
     combined["daynumber"] = combined.index.day
     combined["date"] = (combined.index - pd.Timedelta(dayshift)).strftime("%Y-%m-%d")
     combined["timestamp"] = combined.index.copy()
-    # For plotting, we keep the time-of-day as HH:MM.
+
+    # HH:MM index for plotting
     combined.index = combined.index.strftime("%H:%M")
-    combined = combined.replace(0, np.nan)
-    return combined
+    return combined.replace(0, np.nan)
 
 
 # -----------------------------------------------------------------------------------
-# Helper to compute active intervals
+# Interval computation
 # -----------------------------------------------------------------------------------
-def calculate_active_intervals(df, active_col="Active", day_shift=DEFAULT_DAYSHIFT):
+def calculate_active_intervals(
+    df: pd.DataFrame, active_col: str = "Active", day_shift: str = DEFAULT_DAYSHIFT
+):
     """
-    Determines active time intervals using shifted timestamps to group events,
-    then re-adds the shift so that reported times are in original time.
-
-    For example, if a session spans from 09:30 on Feb 15 to 02:30 on Feb 16 (original time),
-    subtracting a 5h shift turns these into 04:30 and 21:30 on the shifted Feb 15.
-    After computing the active interval (and padding boundaries if necessary), the 5h is re-added
-    so that the reported times remain in the original time.
+    Find contiguous active intervals on the shifted day and return
+    start/stop times in original time plus total active duration.
     """
-    # Return empty values if the DataFrame is empty
     if df.empty:
-        return pd.Series([]), pd.Series([]), pd.Timedelta(0)
+        return (
+            pd.Series(dtype="datetime64[ns]"),
+            pd.Series(dtype="datetime64[ns]"),
+            pd.Timedelta(0),
+        )
 
-    # Convert original timestamps and compute shifted timestamps.
     original_ts = pd.to_datetime(df.timestamp)
     shifted_ts = original_ts - pd.Timedelta(day_shift)
 
-    # Work on a copy sorted by shifted time.
     df_sorted = df.copy()
     df_sorted["shifted_timestamp"] = shifted_ts
     df_sorted = df_sorted.sort_values("shifted_timestamp")
 
-    # The shifted day (as a date string) is already in df["date"].
-    # We assume that df has been filtered to only contain the target day.
-    shifted_day_str = df_sorted["date"].iloc[0]
-    shifted_day = pd.to_datetime(shifted_day_str)  # represents midnight in shifted time
+    shifted_day = pd.to_datetime(df_sorted["date"].iloc[0])  # midnight shifted
     day_start = shifted_day
     day_end = shifted_day + pd.Timedelta(days=1)
+    now_shifted = pd.Timestamp.now() - pd.Timedelta(day_shift)
 
-    # Use the current time in shifted space.
-    current_shifted = pd.Timestamp.now() - pd.Timedelta(day_shift)
+    series = df_sorted[active_col].fillna(0)
+    diff = series.diff()
+    starts = df_sorted["shifted_timestamp"][diff > 0]
+    stops = df_sorted["shifted_timestamp"][diff < 0]
 
-    active_series = df_sorted[active_col].fillna(0)
-    diff = active_series.diff()
+    if len(stops) > len(starts):
+        starts = pd.concat([pd.Series([day_start], index=["start_boundary"]), starts])
+    if len(starts) > len(stops):
+        stop_candidate = now_shifted if now_shifted < day_end else day_end
+        stops = pd.concat([stops, pd.Series([stop_candidate], index=["stop_boundary"])])
 
-    # Identify state transitions.
-    start_events = df_sorted["shifted_timestamp"][diff > 0]
-    stop_events = df_sorted["shifted_timestamp"][diff < 0]
+    starts = starts.sort_values()
+    stops = stops.sort_values()
 
-    # If the first event is a stop (i.e. the session started before logging began), add the shifted day start.
-    if len(stop_events) > len(start_events):
-        start_events = pd.concat(
-            [pd.Series([day_start], index=["start_boundary"]), start_events]
-        )
+    durations = stops.values - starts.values
+    total = sum(durations, pd.Timedelta(0))
 
-    # If a session is still active (more start than stop events), use the current shifted time (but not beyond day_end).
-    if len(start_events) > len(stop_events):
-        stop_candidate = current_shifted if current_shifted < day_end else day_end
-        stop_events = pd.concat(
-            [stop_events, pd.Series([stop_candidate], index=["stop_boundary"])]
-        )
-
-    # Ensure proper pairing.
-    start_events = start_events.sort_values()
-    stop_events = stop_events.sort_values()
-
-    durations = stop_events.values - start_events.values
-    total_duration = sum(durations, pd.Timedelta(0))
-
-    # Re-add the day shift so that the intervals are reported in original time.
-    start_events_orig = start_events + pd.Timedelta(day_shift)
-    stop_events_orig = stop_events + pd.Timedelta(day_shift)
-
-    return start_events_orig, stop_events_orig, total_duration
+    starts_orig = starts + pd.Timedelta(day_shift)
+    stops_orig = stops + pd.Timedelta(day_shift)
+    return starts_orig, stops_orig, total
 
 
 # -----------------------------------------------------------------------------------
-# Reporting and plotting functions
+# Reporting and plotting
 # -----------------------------------------------------------------------------------
-def get_worktime_today(timewindow=DEFAULT_DAILY_TIMEWINDOW, day_shift=DEFAULT_DAYSHIFT):
-    """
-    Computes the total active work time for the target day.
-    The target day is determined as (current time - day_shift).
-    Logs from the last 48h are collected, then only the entries for the target day are used.
-    """
-    loginfos = read_log_files(timewindow)
-    df = unite_information(loginfos, dayshift=day_shift)
-    # Determine the target day (shifted current time)
+def get_worktime_today(
+    timewindow: str = DEFAULT_DAILY_TIMEWINDOW, day_shift: str = DEFAULT_DAYSHIFT
+) -> timedelta:
+    """Compute total active time for the shifted 'today'."""
+    df = unite_information(read_log_files(timewindow), dayshift=day_shift)
     target_date = (pd.Timestamp.now() - pd.Timedelta(day_shift)).strftime("%Y-%m-%d")
     df_target = df[df.date == target_date]
     if df_target.empty or "date" not in df_target.columns:
         return timedelta(0)
-    # Compute active intervals on the target day.
-    _, _, total_duration = calculate_active_intervals(
-        df_target, active_col="Active", day_shift=day_shift
-    )
-    return total_duration
+    _, _, total = calculate_active_intervals(df_target, "Active", day_shift)
+    return total
 
 
 def report_worktime():
-    """
-    Calculates work time for the target day and prints the output.
-    Only this output (and the final menu options) will be printed.
-    """
+    """Print SwiftBar line with HH:MM and color/icon thresholding."""
     time_worked = get_worktime_today()
-    txt_out = str(time_worked)[-8:-3]
-    if time_worked.total_seconds() / 60 < 4.1 * 60:
+    mins = int(time_worked.total_seconds() // 60)
+    txt_out = f"{mins // 60:02d}:{mins % 60:02d}"
+    if mins < 4.1 * 60:
         color_hex, icon = (
             "#00BFFF",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAZ0lEQVQ4jeXQsQmAQBQD0CdYW7iAG7qNm7iGK1gIdjrD2dzBFSpnJ5rm88PPTwhvQ4MRXamgjrPDgBYTlsiHG22VP1gwY0WfCavSJOn4keAMf+9gj87bU9eEEPeQ8cUd5An2C4Ov4gDIJRmeUPVagQAAAABJRU5ErkJggg==",
         )
-    elif time_worked.total_seconds() / 60 < 8.2 * 60:
+    elif mins < 8.2 * 60:
         color_hex, icon = (
             "#40FF61",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAcUlEQVQ4je3SPQqDQBDF8R8ewV7BgwYtxJt4u0A6cStt/Co2mCkCKfLgMTA7839TLL+kAQnLjRP6HCCh/CCoxJx7WALXHrNFYCmrP+AE1Fu9+wO7obqCRnSB4G7bOfRCEwA0eF4bLabMqe884REI/KJWwGUqilB/fg8AAAAASUVORK5CYII=",
         )
-    elif time_worked.total_seconds() / 60 < 9 * 60:
+    elif mins < 9 * 60:
         color_hex, icon = (
             "#FFBF00",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAApElEQVQ4jcXSIQoCQRTG8d8ubhZEjAbTZovRG3gBmwewegWL0RN4GYvdImgRjaaNaxlhWVYdFPGDgcf73v+bNzD8WONwPtIEF1xDDWUsPA3wCEOcMYsNmOOIvNLLcYoJWOCAQYPXxx7LJjDBCjv0XlzQwRZrpI9mhk1Yr/1uxTBTBiZroYsimLfKYP29SW2mCOxToIzxUl/q/wFJpY7+pg3sH3UHCfMenVq4Fs0AAAAASUVORK5CYII=",
@@ -324,77 +334,81 @@ def report_worktime():
             "#FF4040",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAnUlEQVQ4jb3TSwrCMBgE4O8yXeveF3oZwWsoihvPWV0VrWBXdWGFKE1bnwMh+TP/TBKY8ANMkKF8GhnGbeIh9phFuBTTJnEaEXc2eRs7nLGu6vDtqv0cq4AvglqO/pNpGawLJLgEXILjvWGOAxYRg7JmLrAMT+zh9MINHrCtxJuIwarilzXc9zDQnoORW9CiOWgyGekYorEP/sL/cQWw8joTqoKrxAAAAABJRU5ErkJggg==",
         )
-    output = f"{txt_out} | color={color_hex} templateImage='{icon}'"
-    print(output)
+    print(f"{txt_out} | color={color_hex} templateImage='{icon}'")
 
 
-def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
+def plot_daily_stats(
+    df: pd.DataFrame,
+    date: str,
+    filename: str,
+    plot_restrictions: tuple[str, str] = ("08:00", "18:00"),
+):
     """
-    Plots daily statistics for the given date.
-    Saves a CSV of the data and marks opening/closing times.
-    Uses a step-post style for clear state transitions.
+    Plot the daily tracks with optional idle gap labels.
+    Saves a zipped CSV of the plotted rows next to the PNG.
     """
-    categories = CATEGORIES  # This now includes our new columns.
+    categories = CATEGORIES
     fig, ax = plt.subplots(figsize=(12, 4))
     group = df[df.date == date]
-    for j, category in enumerate(categories):
-        line_style = "-" if j == 0 else "--"
-        line_width = 3 if j == 0 else 1
-        ds = -group[category] - 0.125 * j
+
+    for j, cat in enumerate(categories):
+        ds = -group[cat] - 0.125 * j
         ds.plot(
             ax=ax,
             legend=True,
-            linestyle=line_style,
-            linewidth=line_width,
+            linestyle="-" if j == 0 else "--",
+            linewidth=3 if j == 0 else 1,
             drawstyle="steps-post",
         )
 
-        # Add gap duration labels for the Active category only
-        if category == "Active":
-
-            # Find gaps (NaN values)
+        # Idle gap labels on Active only
+        if ENABLE_IDLE_OVERLAY and cat == "Active":
             is_nan = ds.isna()
             gap_starts = np.where(is_nan & ~is_nan.shift(1).fillna(False))[0]
             gap_ends = np.where(is_nan & ~is_nan.shift(-1).fillna(False))[0]
-
-            # Process each gap
             for start, end in zip(gap_starts, gap_ends):
-                # Skip if this is at the start or end of the day
                 if start == 0 or end == len(ds) - 1:
                     continue
-
-                # Calculate gap duration in minutes
-                start_time = pd.to_datetime(group.timestamp.iloc[start])
-                end_time = pd.to_datetime(group.timestamp.iloc[end])
-                gap_mins = (end_time - start_time).total_seconds() / 60
-
-                # Only label gaps > 5 minutes
-                if gap_mins >= 5:
-
-                    # Position label in middle of gap
+                t0 = pd.to_datetime(group.timestamp.iloc[start])
+                t1 = pd.to_datetime(group.timestamp.iloc[end])
+                gap_mins = (t1 - t0).total_seconds() / 60
+                if gap_mins >= DEFAULT_IDLE_THRESHOLD_MINUTES:
                     x_pos = (start + end) / 2
-                    y_pos = ds.iloc[start - 1] + 0.01  # Slightly above the line
+                    y_pos = ds.iloc[max(start - 1, 0)] + 0.01
+                    ax.text(
+                        x_pos,
+                        y_pos,
+                        f"{int(gap_mins)}m",
+                        ha="center",
+                        va="bottom",
+                        fontsize=9,
+                        color="darkblue",
+                        zorder=5,
+                    )
 
-                    # Add text label
-                    ax.text(x_pos, y_pos, f"{int(gap_mins)}m",
-                           horizontalalignment='center',
-                           verticalalignment='bottom',
-                           fontsize=10,
-                           color='grey')
-
+    # Zipped CSV next to PNG
     csv_filename = filename.replace(".png", ".csv.zip").replace(
         "_log_plots", "_log_data"
     )
-    group.to_csv(csv_filename)
-    ax.set_ylim(np.array(ax.get_ylim()) + np.array((-0.1, 0.1)))
+    group.to_csv(
+        csv_filename,
+        compression={
+            "method": "zip",
+            "archive_name": os.path.basename(csv_filename).replace(".zip", ""),
+        },
+    )
+
+    ax.set_ylim(np.array(ax.get_ylim()) + np.array((-0.15, 0.1)))
     try:
-        open_idx = np.argwhere(group.index == "09:00")[0][0]
-        close_idx = np.argwhere(group.index == "17:00")[0][0]
-        y_lim = ax.get_ylim()
-        ax.vlines(open_idx, *y_lim, colors="k", linestyle=":", linewidth=2)
-        ax.vlines(close_idx, *y_lim, colors="k", linestyle=":", linewidth=2)
+        open_idx = np.where(group.index == OPEN_HOUR)[0]
+        close_idx = np.where(group.index == CLOSE_HOUR)[0]
+        if open_idx.size and close_idx.size:
+            y_lim = ax.get_ylim()
+            ax.vlines(int(open_idx[0]), *y_lim, colors="k", linestyle=":", linewidth=2)
+            ax.vlines(int(close_idx[0]), *y_lim, colors="k", linestyle=":", linewidth=2)
     except IndexError:
         pass
+
     tick_indices = np.argwhere(
         group.index.str.contains(":00") | group.index.str.contains(":30")
     ).ravel()
@@ -402,23 +416,27 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     ax.set_xticks(tick_indices[::2])
     ax.set_xticklabels(tick_labels[::2], rotation=90)
     ax.set_yticks([])
+
     if plot_restrictions and group["Active"].notna().sum():
-        valid_entries = group["Active"].notna()
-        idx = np.argwhere(valid_entries.to_numpy())
-        idx_min = idx.min() - 30
-        idx_max = idx.max() + 30
-        start_idx = np.argmax(group.index == plot_restrictions[0])
-        end_idx = np.argmax(group.index == plot_restrictions[1])
-        idx_min = min(idx_min, start_idx)
-        idx_max = max(idx_max, end_idx)
-        ax.set_xlim(idx_min, idx_max)
+        valid = group["Active"].notna().to_numpy()
+        idx = np.argwhere(valid)
+        if idx.size:
+            idx_min = int(idx.min()) - 30
+            idx_max = int(idx.max()) + 30
+            a = np.where(group.index == plot_restrictions[0])[0]
+            b = np.where(group.index == plot_restrictions[1])[0]
+            start_idx = int(a[0]) if a.size else 0
+            end_idx = int(b[0]) if b.size else len(group) - 1
+            ax.set_xlim(min(idx_min, start_idx), max(idx_max, end_idx))
+
     box = ax.get_position()
     ax.set_position(
         [box.x0, box.y0 + box.height * 0.1, box.width * 0.8, box.height * 0.9]
     )
     ax.legend(loc="upper center", bbox_to_anchor=(0.55, -0.43), ncol=5, fontsize=15.5)
+
     delta_start, delta_stop, total_active = calculate_active_intervals(
-        group, active_col="Active", day_shift=DEFAULT_DAYSHIFT
+        group, "Active", DEFAULT_DAYSHIFT
     )
     total_str = str(total_active)[-8:]
     text_box = "Delta\n"
@@ -427,17 +445,17 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     ):
         text_box += f"{start} - {str(delta)[-8:]}\n"
     text_box += f"\nTotal: {total_str:>9}"
-    props = dict(boxstyle="round", facecolor="gray", alpha=0.1)
     ax.text(
         1.03,
         0.97,
         text_box,
         transform=ax.transAxes,
         fontsize=12,
-        verticalalignment="top",
-        bbox=props,
+        va="top",
+        bbox=dict(boxstyle="round", facecolor="gray", alpha=0.1),
         family="monospace",
     )
+
     week_day = (
         pd.to_datetime(group.timestamp.iloc[0]).day_name()[:3]
         if not group.empty
@@ -449,42 +467,34 @@ def plot_daily_stats(df, date, filename, plot_restrictions=["08:00", "18:00"]):
     plt.close()
 
 
-def create_daily_stats(out_path, days_back=5, dayshift=DEFAULT_DAYSHIFT):
-    """
-    Creates daily plots for any missing day within the last 'days_back' days.
-    """
+def create_daily_stats(
+    out_path: str, days_back: int = 5, dayshift: str = DEFAULT_DAYSHIFT
+):
+    """Backfill plots for the last `days_back` shifted days where images are missing."""
     recorded_stats = sorted(glob(os.path.join(out_path, "day_*")))
     recorded_dates = [
         d.split("day_")[1].split(".")[0] for d in recorded_stats if "day_20" in d
     ]
-    missing_dates = []
+    missing = []
     today = pd.Timestamp.now() - pd.Timedelta(dayshift)
     for i in range(days_back):
         check_date = (today - pd.Timedelta(days=i + 1)).strftime("%Y-%m-%d")
         if check_date not in recorded_dates:
-            missing_dates.append(check_date)
-    if missing_dates:
-        loginfos = read_log_files(DEFAULT_DAILY_TIMEWINDOW)
-        df = unite_information(loginfos, dayshift=dayshift)
-        for date in missing_dates:
-            filename = os.path.join(out_path, f"day_{date}.png")
-            plot_daily_stats(df, date, filename)
+            missing.append(check_date)
+    if missing:
+        df = unite_information(read_log_files(f"{days_back + 1}d"), dayshift=dayshift)
+        for date in missing:
+            plot_daily_stats(df, date, os.path.join(out_path, f"day_{date}.png"))
 
 
 def plot_stats_today(
-    out_path,
-    timewindow=DEFAULT_DAILY_TIMEWINDOW,
-    show_plot=True,
-    day_shift=DEFAULT_DAYSHIFT,
+    out_path: str,
+    timewindow: str = DEFAULT_DAILY_TIMEWINDOW,
+    show_plot: bool = True,
+    day_shift: str = DEFAULT_DAYSHIFT,
 ):
-    """
-    Plots statistics for the target day.
-    The target day is determined as (current time - day_shift).
-    The logs from the last 48h are collected, then only the entries for the target day are used.
-    The result is saved as 'current_day.png'.
-    """
-    loginfos = read_log_files(timewindow)
-    df = unite_information(loginfos, dayshift=day_shift)
+    """Generate today's plot image and optionally open it."""
+    df = unite_information(read_log_files(timewindow), dayshift=day_shift)
     if df.empty:
         return
     target_date = (pd.Timestamp.now() - pd.Timedelta(day_shift)).strftime("%Y-%m-%d")
@@ -495,28 +505,23 @@ def plot_stats_today(
 
 
 # -----------------------------------------------------------------------------------
-# Main script entry point (for command line and xbar integration)
+# Main
 # -----------------------------------------------------------------------------------
 if __name__ == "__main__":
     home_path = os.path.expanduser("~")
     out_path = os.path.join(home_path, "Documents", "screentime_log_plots")
-    if not os.path.exists(out_path):
-        os.makedirs(out_path)
-    out_path_data = os.path.join(home_path, "Documents", "screentime_log_data")
-    if not os.path.exists(out_path_data):
-        os.makedirs(out_path_data)
+    os.makedirs(out_path, exist_ok=True)
+    os.makedirs(
+        os.path.join(home_path, "Documents", "screentime_log_data"), exist_ok=True
+    )
 
-    arguments = sys.argv
     script_path = os.path.abspath(__file__)
-
-    if len(arguments) > 1:
-        if arguments[1] == "stats":
-            plot_stats_today(out_path)
+    if len(sys.argv) > 1 and sys.argv[1] == "stats":
+        plot_stats_today(out_path)
     else:
-        # Create daily stats
         create_daily_stats(out_path)
-
-        # Report worktime
         report_worktime()
         print("---")
-        print(f"Stats Today | bash='{script_path}' param1='stats' refresh=true terminal=false")
+        print(
+            f"Stats Today | bash='{script_path}' param1='stats' refresh=true terminal=false"
+        )
