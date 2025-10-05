@@ -139,7 +139,10 @@ def read_log_files(timewindow: str) -> dict[str, pd.DataFrame]:
     """
     lines = _run_log_show(timewindow, COMBINED_PREDICATE)
     if not lines:
-        empty = lambda col: pd.DataFrame({col: []})
+
+        def empty(col):
+            return pd.DataFrame({col: []})
+
         return {
             "lid": empty("LidOpen"),
             "active_display": empty("ActiveDisplay"),
