@@ -1,10 +1,12 @@
-#!/Users/mnotter/miniconda3/bin/python
+#!/Users/mnotter/.venvs/screentime/bin/python3
 # <xbar.title>Screen time logger</xbar.title>
 # <xbar.version>v0.3</xbar.version>
 # <xbar.author>Michael Notter</xbar.author>
 # <xbar.author.github>miykael</xbar.author.github>
 # <xbar.desc>Tracks time spent in front of screen today and creates overview figures with a 5h shift</xbar.desc>
 # <xbar.dependencies>python</xbar.dependencies>
+# <swiftbar.title>Screen time logger</swiftbar.title>
+# <swiftbar.refreshOnOpen>false</swiftbar.refreshOnOpen>
 
 import os
 import pathlib
@@ -14,6 +16,8 @@ from glob import glob
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -301,26 +305,26 @@ def report_worktime():
     time_worked = get_worktime_today()
     txt_out = str(time_worked)[-8:-3]
     if time_worked.total_seconds() / 60 < 4.1 * 60:
-        color, icon = (
-            "1;36",
+        color_hex, icon = (
+            "#00BFFF",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAZ0lEQVQ4jeXQsQmAQBQD0CdYW7iAG7qNm7iGK1gIdjrD2dzBFSpnJ5rm88PPTwhvQ4MRXamgjrPDgBYTlsiHG22VP1gwY0WfCavSJOn4keAMf+9gj87bU9eEEPeQ8cUd5An2C4Ov4gDIJRmeUPVagQAAAABJRU5ErkJggg==",
         )
     elif time_worked.total_seconds() / 60 < 8.2 * 60:
-        color, icon = (
-            "1;32",
+        color_hex, icon = (
+            "#40FF61",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAcUlEQVQ4je3SPQqDQBDF8R8ewV7BgwYtxJt4u0A6cStt/Co2mCkCKfLgMTA7839TLL+kAQnLjRP6HCCh/CCoxJx7WALXHrNFYCmrP+AE1Fu9+wO7obqCRnSB4G7bOfRCEwA0eF4bLabMqe884REI/KJWwGUqilB/fg8AAAAASUVORK5CYII=",
         )
     elif time_worked.total_seconds() / 60 < 9 * 60:
-        color, icon = (
-            "1;33",
+        color_hex, icon = (
+            "#FFBF00",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAApElEQVQ4jcXSIQoCQRTG8d8ubhZEjAbTZovRG3gBmwewegWL0RN4GYvdImgRjaaNaxlhWVYdFPGDgcf73v+bNzD8WONwPtIEF1xDDWUsPA3wCEOcMYsNmOOIvNLLcYoJWOCAQYPXxx7LJjDBCjv0XlzQwRZrpI9mhk1Yr/1uxTBTBiZroYsimLfKYP29SW2mCOxToIzxUl/q/wFJpY7+pg3sH3UHCfMenVq4Fs0AAAAASUVORK5CYII=",
         )
     else:
-        color, icon = (
-            "1;31",
+        color_hex, icon = (
+            "#FF4040",
             "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAnUlEQVQ4jb3TSwrCMBgE4O8yXeveF3oZwWsoihvPWV0VrWBXdWGFKE1bnwMh+TP/TBKY8ANMkKF8GhnGbeIh9phFuBTTJnEaEXc2eRs7nLGu6vDtqv0cq4AvglqO/pNpGawLJLgEXILjvWGOAxYRg7JmLrAMT+zh9MINHrCtxJuIwarilzXc9zDQnoORW9CiOWgyGekYorEP/sL/cQWw8joTqoKrxAAAAABJRU5ErkJggg==",
         )
-    output = f"\033[{color}m{txt_out}\033[0m | templateImage='{icon}'"
+    output = f"{txt_out} | color={color_hex} templateImage='{icon}'"
     print(output)
 
 
@@ -503,16 +507,16 @@ if __name__ == "__main__":
         os.makedirs(out_path_data)
 
     arguments = sys.argv
+    script_path = os.path.abspath(__file__)
+
     if len(arguments) > 1:
         if arguments[1] == "stats":
             plot_stats_today(out_path)
     else:
+        # Create daily stats
         create_daily_stats(out_path)
-        report_worktime()
 
-        # Final menu command options printed for xbar.
-        xbar_dir = pathlib.Path(__file__).parent.absolute()
-        file_path = os.path.join(xbar_dir, __file__)
-        cmd_template = "shell=/Users/mnotter/miniconda3/bin/python param1='{0}' param2='{1}' terminal=false"
+        # Report worktime
+        report_worktime()
         print("---")
-        print("Stats Today | {0}".format(cmd_template.format(file_path, "stats")))
+        print(f"Stats Today | bash='{script_path}' param1='stats' refresh=true terminal=false")
